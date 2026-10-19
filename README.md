@@ -3,7 +3,7 @@
 A PHP and MySQL-based web application that allows users to upload, share, and watch videos while interacting through comments, likes, private messaging, and video-room chat.
 
 The project extends a traditional video-sharing platform with chat features and watch-together playback synchronization.
-To Try The Project :- video-share-chat.free.nf
+To Try The Project :- [video-share-chat.free.nf](https://video-share-chat.free.nf/)
 
 
 ## ✨ Features
