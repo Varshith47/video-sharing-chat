@@ -1,0 +1,51 @@
+<?php
+require_once __DIR__ . '/includes/config.php';
+require_once __DIR__ . '/includes/functions.php';
+if (!isLoggedIn()) { header('Location: login.php'); exit; }
+$mode = (($_GET['mode'] ?? '') === 'video') ? 'video' : 'direct';
+$videoId = max(0,(int)($_GET['video_id'] ?? 0));
+$otherId = max(0,(int)($_GET['user_id'] ?? 0));
+$video = null; $other = null; $contacts = [];
+function chatVideoAllowed(mysqli $conn,int $uid,int $vid): bool {
+ $s=$conn->prepare('SELECT v.id FROM videos v LEFT JOIN video_access a ON a.video_id=v.id AND a.user_id=? WHERE v.id=? AND (v.is_public=1 OR v.user_id=? OR a.user_id=?) LIMIT 1'); $s->bind_param('iiii',$uid,$vid,$uid,$uid); $s->execute(); $yes=(bool)$s->get_result()->fetch_row(); $s->close(); return $yes;
+}
+if ($mode==='video') {
+ if (!$videoId || !chatVideoAllowed($conn,(int)getUserId(),$videoId)) { http_response_code(403); exit('You do not have access to this video.'); }
+ $s=$conn->prepare('SELECT v.*,u.username FROM videos v JOIN users u ON u.id=v.user_id WHERE v.id=?'); $s->bind_param('i',$videoId); $s->execute(); $video=$s->get_result()->fetch_assoc(); $s->close(); if(!$video) { http_response_code(404); exit('Video not found.'); }
+} else {
+ $s=$conn->prepare('SELECT id,username FROM users WHERE id=? AND id<>?'); $s->bind_param('ii',$otherId,$_SESSION['user_id']); $s->execute(); $other=$s->get_result()->fetch_assoc(); $s->close();
+ $result=$conn->query('SELECT id,username FROM users WHERE id<>'.(int)$_SESSION['user_id'].' ORDER BY username'); while($row=$result->fetch_assoc()) $contacts[]=$row;
+ if (!$other && $otherId) { $otherId=0; }
+}
+require_once __DIR__ . '/includes/header.php';
+?>
+<style>
+.chat-shell{display:grid;grid-template-columns:280px minmax(0,1fr);gap:1rem;min-height:600px}.chat-panel,.contact-panel,.watch-panel{background:#fff;border:1px solid #e6eaf0;border-radius:16px;overflow:hidden}.chat-head{padding:1rem 1.2rem;border-bottom:1px solid #edf0f5;background:#f8fafc}.chat-body{height:390px;overflow:auto;padding:1rem;background:#f8fafc}.chat-msg{max-width:82%;margin:0 0 .8rem;padding:.7rem .85rem;border-radius:14px;background:#fff;border:1px solid #e5e7eb;overflow-wrap:anywhere}.chat-msg.mine{margin-left:auto;background:#e8f2ff;border-color:#c8defd}.chat-msg small{display:block;color:#667085;font-size:.72rem;margin-bottom:.25rem}.chat-form{display:flex;gap:.5rem;padding:.9rem;border-top:1px solid #edf0f5}.chat-form input{min-width:0}.contact-list a{display:block;padding:.85rem 1rem;border-bottom:1px solid #edf0f5;text-decoration:none;color:#243044}.contact-list a.active,.contact-list a:hover{background:#eaf2ff}.chat-video{width:100%;max-height:500px;background:#111;border-radius:12px}.typing-line{min-height:22px;padding:0 1rem;color:#64748b;font-size:.85rem}.chat-content{min-width:0}@media(max-width:760px){.chat-shell{grid-template-columns:1fr}.contact-panel{max-height:220px;overflow:auto}.chat-body{height:340px}}
+</style>
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3"><div><h2 class="mb-1"><?php echo $mode==='video'?'Watch together':'Direct messages'; ?></h2><p class="text-muted mb-0"><?php echo $mode==='video'?'Chat while watching this shared video. Playback is synchronized through periodic updates.':'Private one-to-one conversations with registered users.'; ?></p></div><a href="index.php" class="btn btn-outline-secondary">← Back to videos</a></div>
+<div class="chat-shell">
+<?php if($mode==='direct'): ?><aside class="contact-panel"><div class="chat-head"><strong>People</strong><div class="small text-muted">Select a user to message</div></div><div class="contact-list"><?php if(!$contacts): ?><p class="p-3 text-muted">No other users yet. Invite someone to register.</p><?php endif; foreach($contacts as $c): ?><a class="<?php echo $otherId===(int)$c['id']?'active':''; ?>" href="chat.php?user_id=<?php echo (int)$c['id']; ?>"><i class="fas fa-circle-user me-2"></i><?php echo htmlspecialchars($c['username']); ?><?php if($otherId===(int)$c['id']): ?><span class="float-end">●</span><?php endif; ?></a><?php endforeach; ?></div></aside><?php endif; ?>
+<main class="chat-content">
+<?php if($mode==='video'): ?><section class="watch-panel mb-3"><div class="p-3"><video id="watch-video" class="chat-video" controls playsinline poster="<?php echo htmlspecialchars(THUMBNAIL_UPLOAD_PATH.$video['thumbnail_path']); ?>"><source src="<?php echo htmlspecialchars(VIDEO_UPLOAD_PATH.$video['file_path']); ?>" type="video/mp4">Your browser cannot play this video.</video><h4 class="mt-3 mb-1"><?php echo htmlspecialchars($video['title']); ?></h4><p class="text-muted mb-0">Shared by <?php echo htmlspecialchars($video['username']); ?> · Use play/pause/seek to broadcast playback to other viewers in this room.</p><div id="sync-note" class="small text-muted mt-2">Playback sync is ready.</div></div></section><?php endif; ?>
+<section class="chat-panel"><div class="chat-head"><strong><?php echo $mode==='video'?'Video room chat':($other?htmlspecialchars($other['username']):'Choose a conversation'); ?></strong><div class="small text-muted"><?php echo $mode==='video'?'Messages are visible to users who can access this video.':'Private conversation'; ?></div></div>
+<?php if($mode==='direct' && !$other): ?><div class="p-5 text-center text-muted"><i class="fas fa-comments fa-3x mb-3"></i><p>Select a person from the list to start chatting.</p></div><?php else: ?><div id="chat-messages" class="chat-body" aria-live="polite"><div class="text-muted">Loading messages…</div></div><div id="typing-line" class="typing-line" aria-live="polite"></div><form id="chat-form" class="chat-form"><input id="chat-input" class="form-control" maxlength="2000" autocomplete="off" placeholder="Write a message…" required><button class="btn btn-primary" type="submit"><i class="fas fa-paper-plane"></i> Send</button></form><?php endif; ?></section>
+</main></div>
+<?php if($mode==='direct' && $other || $mode==='video'): ?>
+<script>
+(()=>{
+const cfg={room:<?php echo json_encode($mode); ?>,videoId:<?php echo (int)$videoId; ?>,userId:<?php echo (int)$otherId; ?>,me:<?php echo (int)getUserId(); ?>,csrf:<?php echo json_encode(csrfToken()); ?>};
+const list=document.getElementById('chat-messages'),form=document.getElementById('chat-form'),input=document.getElementById('chat-input'),typingLine=document.getElementById('typing-line');let lastId=0,typingTimer=null,lastPlaybackPush=0,applyingRemote=false,lastPlaybackEpoch=0;
+function apiUrl(action){const p=new URLSearchParams({action,room:cfg.room});if(cfg.videoId)p.set('video_id',cfg.videoId);if(cfg.userId)p.set('user_id',cfg.userId);return 'chat-api.php?'+p.toString();}
+async function post(action,data={}){const body=new URLSearchParams({action,room:cfg.room,csrf_token:cfg.csrf,...data});if(cfg.videoId)body.set('video_id',cfg.videoId);if(cfg.userId)body.set('user_id',cfg.userId);const r=await fetch('chat-api.php',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const j=await r.json();if(!r.ok||!j.ok)throw new Error(j.error||'Request failed');return j;}
+function addMessage(m){const wrap=document.createElement('div');wrap.className='chat-msg'+(Number(m.sender_id)===cfg.me?' mine':'');const meta=document.createElement('small');meta.textContent=(Number(m.sender_id)===cfg.me?'You':m.username)+' · '+new Date(m.created_at.replace(' ','T')+'Z').toLocaleString();const body=document.createElement('div');body.textContent=m.message;wrap.append(meta,body);list.appendChild(wrap);}
+async function poll(){try{const r=await fetch(apiUrl('fetch')+'&after='+lastId,{cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Chat unavailable');if(d.messages.length){const nearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<100;const empty=list.querySelector('.text-muted');if(empty)list.innerHTML='';for(const m of d.messages){addMessage(m);lastId=Math.max(lastId,Number(m.id));}if(nearBottom)list.scrollTop=list.scrollHeight;}typingLine.textContent=d.typing.length?d.typing.join(', ')+' typing…':'';if(cfg.room==='video'&&d.playback)syncPlayback(d.playback);}catch(e){typingLine.textContent=e.message;}}
+form?.addEventListener('submit',async e=>{e.preventDefault();const message=input.value.trim();if(!message)return;input.disabled=true;try{await post('send',{message});input.value='';await post('typing',{typing:'0'});await poll();}catch(err){typingLine.textContent=err.message;}finally{input.disabled=false;input.focus();}});
+input?.addEventListener('input',()=>{post('typing',{typing:input.value.trim()?'1':'0'}).catch(()=>{});clearTimeout(typingTimer);typingTimer=setTimeout(()=>post('typing',{typing:'0'}).catch(()=>{}),2500);});
+const video=document.getElementById('watch-video');
+function pushPlayback(){if(!video||applyingRemote)return;const now=Date.now();if(now-lastPlaybackPush<900)return;lastPlaybackPush=now;post('playback',{position:String(video.currentTime||0),paused:video.paused?'1':'0'}).then(()=>{const n=document.getElementById('sync-note');if(n)n.textContent='Playback state shared with this room.';}).catch(()=>{});}
+video?.addEventListener('play',pushPlayback);video?.addEventListener('pause',pushPlayback);video?.addEventListener('seeked',pushPlayback);video?.addEventListener('timeupdate',()=>{if(!video.paused)pushPlayback();});
+function syncPlayback(s){if(!video||Number(s.updated_by)===cfg.me||Number(s.updated_epoch)<=lastPlaybackEpoch)return;lastPlaybackEpoch=Number(s.updated_epoch);const drift=Math.abs(video.currentTime-Number(s.position_seconds));if(drift>2){applyingRemote=true;try{video.currentTime=Number(s.position_seconds);}catch(e){}setTimeout(()=>applyingRemote=false,350);}if(s.is_paused&&!video.paused){applyingRemote=true;video.pause();setTimeout(()=>applyingRemote=false,350);}else if(!s.is_paused&&video.paused){const n=document.getElementById('sync-note');if(n)n.textContent='Another viewer is playing the video. Press Play to sync (browser autoplay may be blocked).';}}
+poll();setInterval(poll,2500);window.addEventListener('beforeunload',()=>{post('typing',{typing:'0'}).catch(()=>{});});
+})();
+</script><?php endif; ?>
+<?php require_once __DIR__ . '/includes/footer.php'; ?>
